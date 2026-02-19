@@ -1,144 +1,69 @@
 ---
 name: marker-convert
-description: Convert PDFs with Marker into markdown, extracted images, JSON, and HTML. Use when asked to run Marker CLI workflows (`marker_single`, `marker`) for single files or folders.
+description: Convert PDFs to markdown, JSON, or HTML using the Marker CLI. This skill should be used when asked to run Marker conversions (`marker_single`, `marker`) for single files or folders of PDFs, including batch processing workflows.
 ---
 
 # Marker Convert
 
-Upstream Marker project:
-- https://github.com/datalab-to/marker
+Convert PDFs into markdown, extracted images, JSON, and HTML via the [Marker](https://github.com/datalab-to/marker) CLI.
 
-Citation (upstream Marker):
-- `datalab-to. Marker (software). GitHub repository: https://github.com/datalab-to/marker`
+## Workflow
 
-## Overview
-Run reliable Marker conversions for single PDFs and PDF folders. Prefer packaged wrappers in `scripts/` to keep commands consistent and version-aware.
-
-## Configuration
-
-Default config file:
-- `~/.codex/skills/marker-convert/config/marker_convert.env`
-
-The wrapper auto-loads this file. Override with:
-- `--settings /path/to/marker_convert.env`
-- `--no-settings`
-
-Important config keys:
-- `MARKER_TIMEOUT` wrapper timeout in seconds
-- `USE_LLM` enable Marker `--use_llm`
-- `LLM_SERVICE` set Marker `--llm_service`
-- `MODEL_NAME` set Marker `--model_name`
-- `SERVICE_TIMEOUT` set Marker `--timeout`
-- `CLAUDE_MODEL_NAME` and `GEMINI_MODEL_NAME`
-- `CLAUDE_API_KEY` or `ANTHROPIC_API_KEY`
-- `OPENAI_API_KEY`
-- `GOOGLE_API_KEY`
-
-If `USE_LLM=true` and no key is found, the wrapper exits with a brief message telling which key to set.
-Prefer environment variables for secrets instead of CLI key flags. API key CLI flags are blocked.
+1. Confirm `marker` and `marker_single` are available on `PATH`.
+2. Determine the conversion mode: `single` for one PDF, `batch` for a folder.
+3. Run the wrapper script rather than hand-writing raw Marker commands.
+4. Verify outputs: content files (`.md`, `.json`, `.html`) and extracted images in each document's `images/` subdirectory.
 
 ## Quick Start
 
-Use the generic wrapper for most requests:
-
 ```bash
-SKILL_DIR=~/.codex/skills/marker-convert/scripts
+SKILL_DIR=~/.claude/skills/marker-convert/scripts
 
 # Single PDF -> markdown + images
 bash "$SKILL_DIR/marker_convert.sh" \
-  --mode single \
   --input /path/to/paper.pdf \
   --output /path/to/output \
   --format markdown
 
-# Folder of PDFs -> HTML outputs
+# Folder of PDFs -> markdown
 bash "$SKILL_DIR/marker_convert.sh" \
-  --mode batch \
   --input /path/to/pdf_folder \
   --output /path/to/output \
-  --format html
+  --format markdown
 
-# Convenience batch entrypoint for folder-of-PDF jobs
+# Convenience batch entrypoint (always runs --mode batch)
 bash "$SKILL_DIR/batch_convert.sh" \
-  --input /path/to/pdf_folder \
-  --output /path/to/output \
-  --format markdown
-```
-
-## Workflow
-
-1. Confirm tools are available: `marker`, `marker_single`.
-2. Select mode:
-- `single`: one PDF file.
-- `batch`: a folder of PDFs.
-3. Run wrapper scripts from `scripts/` instead of hand-writing long commands.
-4. Verify outputs:
-- content files (`.md`, `.json`, `.html`) in output subfolders.
-- extracted images in each document's `images/` directory (unless disabled).
-
-## Scripts
-
-### `scripts/marker_convert.sh`
-Use for single/batch conversions with a stable argument shape.
-
-Supported options:
-- `--mode auto|single|batch`
-- `--input <path>`
-- `--output <path>`
-- `--format markdown|json|html` (single/batch modes)
-- `--page-range <range>` (single/batch modes)
-- `--config-json <path>` (single/batch modes)
-- `--disable-image-extraction`
-- `--disable-multiprocessing`
-- `--timeout <seconds>`
-- `--use-llm`
-- `--llm-service <import.path.Class>`
-- `--model-name <name>`
-- `--service-timeout <seconds>`
-- `--settings <path>`, `--no-settings`
-- `-- <extra marker args>`
-
-Examples:
-
-```bash
-# Auto-mode (file => single, directory => batch)
-bash ~/.codex/skills/marker-convert/scripts/marker_convert.sh \
-  --input /path/to/file_or_folder \
-  --output /path/to/output \
-  --format markdown
-
-# Explicit batch mode (folder -> folder)
-bash ~/.codex/skills/marker-convert/scripts/marker_convert.sh \
-  --mode batch \
   --input /path/to/pdf_folder \
   --output /path/to/output
 ```
 
-### `scripts/batch_convert.sh`
-Use when the request is simply "convert this folder of PDFs".
+Auto-mode (the default) detects whether `--input` is a file or directory and selects single/batch accordingly.
+
+## Scripts
+
+| Script | Purpose |
+|---|---|
+| `scripts/marker_convert.sh` | Primary wrapper — supports `--mode auto\|single\|batch` and all Marker flags |
+| `scripts/batch_convert.sh` | Thin convenience wrapper that always runs batch mode |
+| `scripts/smoke_test.sh` | Regression test: single conversion, missing-key guard, batch conversion |
+
+## Configuration
+
+The wrapper auto-loads `config/marker_convert.env` (relative to the scripts directory). Override with `--settings <path>` or disable with `--no-settings`. CLI flags always take precedence over settings-file values.
+
+To enable LLM-enhanced conversion, set `USE_LLM=true` in the settings file or pass `--use-llm`. The wrapper validates that the required API key is present and exits with guidance if not.
+
+Refer to `references/marker-cli.md` for the full list of CLI options, config keys, and supported Marker flags.
+
+## Smoke Test
+
+To validate the skill after edits:
 
 ```bash
-bash ~/.codex/skills/marker-convert/scripts/batch_convert.sh \
-  --input /path/to/pdf_folder \
-  --output /path/to/output \
-  --format markdown
-```
-
-### `scripts/smoke_test.sh`
-Run a quick regression test after edits:
-
-```bash
-bash ~/.codex/skills/marker-convert/scripts/smoke_test.sh \
+bash ~/.claude/skills/marker-convert/scripts/smoke_test.sh \
   --pdf /path/to/sample.pdf
 ```
 
-## Version Check
+## References
 
-Marker CLI behavior varies by installed version. Validate current flags before passing advanced options:
-
-```bash
-marker_single --help
-marker --help
-```
-
-See `references/marker-cli.md` for command mapping and output notes.
+- `references/marker-cli.md` — full CLI option reference, config key documentation, output format details, and version notes
