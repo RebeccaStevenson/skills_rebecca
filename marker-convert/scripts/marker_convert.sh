@@ -10,9 +10,9 @@ Usage:
   marker_convert.sh --input <path> [--output <path>] [options]
 
 Options:
-  --mode <auto|single|batch|chunk>   Conversion mode (default: auto)
+  --mode <auto|single|batch>         Conversion mode (default: auto)
   --input <path>                      Input PDF file or input folder
-  --output <path>                     Output folder (required for chunk mode)
+  --output <path>                     Output folder (default: ./marker_output)
   --format <markdown|json|html>       Output format for single/batch (default: markdown)
   --page-range <range>                Example: 0,5-10,20
   --config-json <path>                Marker config JSON
@@ -182,10 +182,8 @@ parse_settings_file() {
       CLAUDE_API_KEY) CLAUDE_API_KEY="${value}" ;;
       OPENAI_API_KEY) OPENAI_API_KEY="${value}" ;;
       GOOGLE_API_KEY) GOOGLE_API_KEY="${value}" ;;
-      NUM_DEVICES) NUM_DEVICES="${value}" ;;
       MARKER_BIN) MARKER_BIN="${value}" ;;
       MARKER_SINGLE_BIN) MARKER_SINGLE_BIN="${value}" ;;
-      MARKER_CHUNK_BIN) MARKER_CHUNK_BIN="${value}" ;;
     esac
   done < "${file}"
 }
@@ -396,7 +394,7 @@ resolve_mode() {
 }
 
 resolve_default_output_path() {
-  if [[ -z "${OUTPUT_PATH}" && "${MODE}" != "chunk" ]]; then
+  if [[ -z "${OUTPUT_PATH}" ]]; then
     OUTPUT_PATH="$(pwd)/marker_output"
   fi
 }
@@ -454,7 +452,7 @@ infer_llm_provider() {
 validate_llm_keys() {
   local llm_provider=""
 
-  if [[ "${USE_LLM}" != true || "${MODE}" == "chunk" ]]; then
+  if [[ "${USE_LLM}" != true ]]; then
     return
   fi
 
@@ -522,22 +520,6 @@ build_marker_command() {
       fi
       MARKER_CMD=("${MARKER_BIN:-marker}" "${INPUT_PATH}" "--output_dir" "${OUTPUT_PATH}" "--output_format" "${OUTPUT_FORMAT}")
       ;;
-    chunk)
-      if [[ ! -d "${INPUT_PATH}" ]]; then
-        echo "Error: chunk mode requires a directory input." >&2
-        exit 1
-      fi
-      if [[ -z "${OUTPUT_PATH}" ]]; then
-        echo "Error: chunk mode requires --output." >&2
-        exit 1
-      fi
-      if [[ -z "${NUM_DEVICES:-}" ]]; then
-        echo "Error: chunk mode requires NUM_DEVICES to be set (example: NUM_DEVICES=1)." >&2
-        exit 1
-      fi
-      export NUM_DEVICES
-      MARKER_CMD=("${MARKER_CHUNK_BIN:-marker_chunk_convert}" "${INPUT_PATH}" "${OUTPUT_PATH}")
-      ;;
     *)
       echo "Error: unsupported mode '${MODE}'." >&2
       usage
@@ -546,11 +528,7 @@ build_marker_command() {
   esac
 }
 
-append_non_chunk_marker_flags() {
-  if [[ "${MODE}" == "chunk" ]]; then
-    return
-  fi
-
+append_marker_flags() {
   if [[ -n "${PAGE_RANGE}" ]]; then
     MARKER_CMD+=("--page_range" "${PAGE_RANGE}")
   fi
@@ -620,7 +598,7 @@ main() {
   validate_llm_keys
   export_api_keys
   build_marker_command
-  append_non_chunk_marker_flags
+  append_marker_flags
   append_extra_marker_flags
   run_marker_command
 }

@@ -1,6 +1,6 @@
 ---
 name: marker-convert
-description: Convert PDFs with Marker into markdown, extracted images, JSON, HTML, and chunked outputs. Use when asked to run Marker CLI workflows (`marker_single`, `marker`, `marker_chunk_convert`) for single files or folders.
+description: Convert PDFs with Marker into markdown, extracted images, JSON, and HTML. Use when asked to run Marker CLI workflows (`marker_single`, `marker`) for single files or folders.
 ---
 
 # Marker Convert
@@ -67,11 +67,10 @@ bash "$SKILL_DIR/batch_convert.sh" \
 
 ## Workflow
 
-1. Confirm tools are available: `marker`, `marker_single`, and optionally `marker_chunk_convert`.
+1. Confirm tools are available: `marker`, `marker_single`.
 2. Select mode:
 - `single`: one PDF file.
 - `batch`: a folder of PDFs.
-- `chunk`: chunked folder conversion using `marker_chunk_convert`.
 3. Run wrapper scripts from `scripts/` instead of hand-writing long commands.
 4. Verify outputs:
 - content files (`.md`, `.json`, `.html`) in output subfolders.
@@ -80,10 +79,10 @@ bash "$SKILL_DIR/batch_convert.sh" \
 ## Scripts
 
 ### `scripts/marker_convert.sh`
-Use for single/batch/chunk conversions with a stable argument shape.
+Use for single/batch conversions with a stable argument shape.
 
 Supported options:
-- `--mode auto|single|batch|chunk`
+- `--mode auto|single|batch`
 - `--input <path>`
 - `--output <path>`
 - `--format markdown|json|html` (single/batch modes)
@@ -99,9 +98,6 @@ Supported options:
 - `--settings <path>`, `--no-settings`
 - `-- <extra marker args>`
 
-Chunk mode prerequisite:
-- set `NUM_DEVICES` before calling chunk mode, for example `NUM_DEVICES=1`.
-
 Examples:
 
 ```bash
@@ -111,11 +107,11 @@ bash ~/.codex/skills/marker-convert/scripts/marker_convert.sh \
   --output /path/to/output \
   --format markdown
 
-# Chunk mode (folder -> folder)
+# Explicit batch mode (folder -> folder)
 bash ~/.codex/skills/marker-convert/scripts/marker_convert.sh \
-  --mode chunk \
+  --mode batch \
   --input /path/to/pdf_folder \
-  --output /path/to/chunk_output
+  --output /path/to/output
 ```
 
 ### `scripts/batch_convert.sh`
@@ -143,7 +139,6 @@ Marker CLI behavior varies by installed version. Validate current flags before p
 ```bash
 marker_single --help
 marker --help
-marker_chunk_convert --help
 ```
 
 See `references/marker-cli.md` for command mapping and output notes.

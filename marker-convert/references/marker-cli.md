@@ -8,8 +8,6 @@ Reference repository: <https://github.com/datalab-to/marker>
   - `marker_single /path/to/file.pdf --output_dir /path/to/output --output_format markdown`
 - Batch folder conversion:
   - `marker /path/to/input/folder --output_dir /path/to/output`
-- Chunk conversion:
-  - `marker_chunk_convert ...` (arguments vary by Marker version)
 - Interactive extraction UI:
   - `marker_extract`
 
@@ -20,7 +18,6 @@ Validate local behavior before advanced flag usage:
 ```bash
 marker_single --help
 marker --help
-marker_chunk_convert --help
 ```
 
 Observed in this environment:
@@ -32,9 +29,6 @@ Observed in this environment:
   - `--use_llm`, `--llm_service`, `--model_name`
   - `--timeout`, `--claude_model_name`, `--gemini_model_name`
   - `--page_range`, `--config_json`
-- `marker_chunk_convert` expects:
-  - `marker_chunk_convert <in_folder> <out_folder>`
-  - `NUM_DEVICES` must be set in this environment (example: `NUM_DEVICES=1`)
 
 ## Output Expectations
 
