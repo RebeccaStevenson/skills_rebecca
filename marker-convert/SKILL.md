@@ -5,6 +5,12 @@ description: Convert PDFs with Marker into markdown, extracted images, JSON, HTM
 
 # Marker Convert
 
+Upstream Marker project:
+- https://github.com/datalab-to/marker
+
+Citation (upstream Marker):
+- `datalab-to. Marker (software). GitHub repository: https://github.com/datalab-to/marker`
+
 ## Overview
 Run reliable Marker conversions for single PDFs and PDF folders. Prefer packaged wrappers in `scripts/` to keep commands consistent and version-aware.
 
