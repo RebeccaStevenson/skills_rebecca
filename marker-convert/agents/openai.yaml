@@ -1,0 +1,4 @@
+interface:
+  display_name: "Marker PDF Convert"
+  short_description: "Convert PDFs with Marker to markdown, JSON, and HTML"
+  default_prompt: "Use $marker-convert to convert these PDFs with Marker and save outputs to a chosen directory."
