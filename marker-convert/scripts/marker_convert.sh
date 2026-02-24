@@ -5,39 +5,42 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_SETTINGS_FILE="${SCRIPT_DIR}/../config/marker_convert.env"
 
 usage() {
-  cat <<'EOF'
+  cat <<'USAGE'
 Usage:
   marker_convert.sh --input <path> [--output <path>] [options]
 
+Sequential conversion only. Each PDF is processed individually with marker_single.
+
 Options:
-  --mode <auto|single|batch>         Conversion mode (default: auto)
-  --input <path>                      Input PDF file or input folder
-  --output <path>                     Output folder (default: ./marker_output)
-  --format <markdown|json|html>       Output format for single/batch (default: markdown)
-  --page-range <range>                Example: 0,5-10,20
-  --config-json <path>                Marker config JSON
-  --disable-image-extraction          Disable extracted images
-  --disable-multiprocessing           Disable multiprocessing
-  --timeout <seconds>                 Wrapper timeout (0 disables)
-  --use-llm                           Enable Marker --use_llm
-  --llm-service <import.path.Class>   Marker --llm_service value
-  --model-name <name>                 Marker --model_name value
-  --service-timeout <seconds>         Marker service timeout via --timeout
-  --claude-model-name <name>          Marker --claude_model_name
-  --gemini-model-name <name>          Marker --gemini_model_name
-  --settings <path>                   Load settings file (default shown below)
-  --no-settings                        Do not load any settings file
-  -h, --help                          Show this help
-  --                                  Pass remaining args to marker command
+  --input <path>                     Input PDF file or input folder (required)
+  --output <path>                    Output folder (default: ./marker_output)
+  --format <markdown|json|html>      Output format (default: markdown)
+  --page-range <range>               Example: 0,5-10,20
+  --config-json <path>               Marker config JSON
+  --disable-image-extraction         Disable extracted images
+  --disable-multiprocessing          Disable multiprocessing
+  --timeout <seconds>                Per-PDF wrapper timeout (0 disables)
+  --state-dir <path>                 State/log directory (default: <output>/state)
+  --force                            Reprocess PDFs already listed in processed_files.txt
+  --fail-fast                        Stop on first conversion failure
+  --use-llm                          Enable Marker --use_llm
+  --llm-service <import.path.Class>  Marker --llm_service value
+  --model-name <name>                Marker --model_name value
+  --service-timeout <seconds>        Marker service timeout via --timeout
+  --claude-model-name <name>         Marker --claude_model_name
+  --gemini-model-name <name>         Marker --gemini_model_name
+  --settings <path>                  Load settings file (default shown below)
+  --no-settings                      Do not load any settings file
+  -h, --help                         Show this help
+  --                                 Pass remaining args to marker_single
 
 Default settings file:
   ../config/marker_convert.env (relative to this script)
 
 Examples:
-  marker_convert.sh --mode single --input /tmp/paper.pdf --output /tmp/out --format markdown
-  marker_convert.sh --mode batch --input /tmp/pdfs --output /tmp/out --format html
-  marker_convert.sh --mode batch --input /tmp/pdfs --settings /tmp/marker_convert.env
-EOF
+  marker_convert.sh --input /tmp/paper.pdf --output /tmp/out --format markdown
+  marker_convert.sh --input /tmp/pdfs --output /tmp/out --timeout 300
+USAGE
 }
 
 to_lower() {
@@ -114,8 +117,16 @@ PY
   return 1
 }
 
+append_unique_line() {
+  local file="$1"
+  local value="$2"
+
+  if ! grep -F -x -q -- "${value}" "${file}"; then
+    printf '%s\n' "${value}" >> "${file}"
+  fi
+}
+
 init_defaults() {
-  MODE="auto"
   INPUT_PATH=""
   OUTPUT_PATH=""
   OUTPUT_FORMAT="markdown"
@@ -125,6 +136,10 @@ init_defaults() {
   DISABLE_MULTIPROCESSING=false
 
   MARKER_TIMEOUT=0
+  STATE_DIR=""
+  FORCE=false
+  FAIL_FAST=false
+
   USE_LLM=false
   LLM_SERVICE=""
   MODEL_NAME=""
@@ -139,7 +154,16 @@ init_defaults() {
   USE_SETTINGS=true
   SETTINGS_EXPLICIT=false
   EXTRA_ARGS=()
-  MARKER_CMD=()
+
+  PDF_FILES=()
+  MARKER_BASE_ARGS=()
+
+  PROCESSED_LIST=""
+  FAILED_LOG=""
+  FAILED_ARCHIVE=""
+  CONVERSION_LOG=""
+  ERROR_LOG=""
+  SESSION_STARTED=""
 }
 
 parse_settings_file() {
@@ -166,13 +190,15 @@ parse_settings_file() {
     fi
 
     case "${key}" in
-      MODE) MODE="${value}" ;;
       OUTPUT_FORMAT) OUTPUT_FORMAT="${value}" ;;
       PAGE_RANGE) PAGE_RANGE="${value}" ;;
       CONFIG_JSON) CONFIG_JSON="${value}" ;;
       DISABLE_IMAGE_EXTRACTION) DISABLE_IMAGE_EXTRACTION="${value}" ;;
       DISABLE_MULTIPROCESSING) DISABLE_MULTIPROCESSING="${value}" ;;
       MARKER_TIMEOUT) MARKER_TIMEOUT="${value}" ;;
+      STATE_DIR) STATE_DIR="${value}" ;;
+      FORCE) FORCE="${value}" ;;
+      FAIL_FAST) FAIL_FAST="${value}" ;;
       USE_LLM) USE_LLM="${value}" ;;
       LLM_SERVICE) LLM_SERVICE="${value}" ;;
       MODEL_NAME) MODEL_NAME="${value}" ;;
@@ -182,7 +208,6 @@ parse_settings_file() {
       CLAUDE_API_KEY) CLAUDE_API_KEY="${value}" ;;
       OPENAI_API_KEY) OPENAI_API_KEY="${value}" ;;
       GOOGLE_API_KEY) GOOGLE_API_KEY="${value}" ;;
-      MARKER_BIN) MARKER_BIN="${value}" ;;
       MARKER_SINGLE_BIN) MARKER_SINGLE_BIN="${value}" ;;
     esac
   done < "${file}"
@@ -234,10 +259,6 @@ load_settings_if_needed() {
 parse_cli_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --mode)
-        MODE="${2:-}"
-        shift 2
-        ;;
       --input)
         INPUT_PATH="${2:-}"
         shift 2
@@ -269,6 +290,18 @@ parse_cli_args() {
       --timeout)
         MARKER_TIMEOUT="${2:-}"
         shift 2
+        ;;
+      --state-dir)
+        STATE_DIR="${2:-}"
+        shift 2
+        ;;
+      --force)
+        FORCE=true
+        shift
+        ;;
+      --fail-fast)
+        FAIL_FAST=true
+        shift
         ;;
       --use-llm)
         USE_LLM=true
@@ -349,6 +382,18 @@ normalize_boolean_flags() {
     DISABLE_MULTIPROCESSING=false
   fi
 
+  if is_true "${FORCE}"; then
+    FORCE=true
+  else
+    FORCE=false
+  fi
+
+  if is_true "${FAIL_FAST}"; then
+    FAIL_FAST=true
+  else
+    FAIL_FAST=false
+  fi
+
   if is_true "${USE_LLM}"; then
     USE_LLM=true
   else
@@ -375,27 +420,34 @@ validate_inputs() {
     exit 1
   fi
 
+  if [[ ! -f "${INPUT_PATH}" && ! -d "${INPUT_PATH}" ]]; then
+    echo "Error: --input must be an existing file or directory: ${INPUT_PATH}" >&2
+    exit 1
+  fi
+
   if [[ -n "${CONFIG_JSON}" ]]; then
     check_file_readable_regular "${CONFIG_JSON}" "config JSON"
   fi
-}
 
-resolve_mode() {
-  if [[ "${MODE}" == "auto" ]]; then
-    if [[ -f "${INPUT_PATH}" ]]; then
-      MODE="single"
-    elif [[ -d "${INPUT_PATH}" ]]; then
-      MODE="batch"
-    else
-      echo "Error: --input must be an existing file or directory for auto mode." >&2
+  case "${OUTPUT_FORMAT}" in
+    markdown|json|html)
+      ;;
+    *)
+      echo "Error: --format must be one of: markdown, json, html" >&2
       exit 1
-    fi
-  fi
+      ;;
+  esac
 }
 
 resolve_default_output_path() {
   if [[ -z "${OUTPUT_PATH}" ]]; then
     OUTPUT_PATH="$(pwd)/marker_output"
+  fi
+}
+
+resolve_state_dir() {
+  if [[ -z "${STATE_DIR}" ]]; then
+    STATE_DIR="${OUTPUT_PATH}/state"
   fi
 }
 
@@ -504,82 +556,211 @@ export_api_keys() {
   fi
 }
 
-build_marker_command() {
-  case "${MODE}" in
-    single)
-      if [[ ! -f "${INPUT_PATH}" ]]; then
-        echo "Error: single mode requires a file input." >&2
-        exit 1
-      fi
-      MARKER_CMD=("${MARKER_SINGLE_BIN:-marker_single}" "${INPUT_PATH}" "--output_dir" "${OUTPUT_PATH}" "--output_format" "${OUTPUT_FORMAT}")
-      ;;
-    batch)
-      if [[ ! -d "${INPUT_PATH}" ]]; then
-        echo "Error: batch mode requires a directory input." >&2
-        exit 1
-      fi
-      MARKER_CMD=("${MARKER_BIN:-marker}" "${INPUT_PATH}" "--output_dir" "${OUTPUT_PATH}" "--output_format" "${OUTPUT_FORMAT}")
-      ;;
-    *)
-      echo "Error: unsupported mode '${MODE}'." >&2
-      usage
-      exit 1
-      ;;
-  esac
+collect_pdf_files() {
+  local found_any=false
+
+  if [[ -f "${INPUT_PATH}" ]]; then
+    PDF_FILES=("${INPUT_PATH}")
+    return
+  fi
+
+  while IFS= read -r -d '' file; do
+    PDF_FILES+=("${file}")
+    found_any=true
+  done < <(find "${INPUT_PATH}" -type f -iname '*.pdf' -print0)
+
+  if [[ "${found_any}" == true ]]; then
+    IFS=$'\n' PDF_FILES=($(printf '%s\n' "${PDF_FILES[@]}" | sort))
+    unset IFS
+  fi
 }
 
-append_marker_flags() {
+prepare_state_files() {
+  mkdir -p "${OUTPUT_PATH}" "${STATE_DIR}"
+
+  PROCESSED_LIST="${STATE_DIR}/processed_files.txt"
+  FAILED_LOG="${STATE_DIR}/failed_conversions.txt"
+  FAILED_ARCHIVE="${STATE_DIR}/failed_conversions_archive.txt"
+  CONVERSION_LOG="${STATE_DIR}/conversion_log.txt"
+  ERROR_LOG="${STATE_DIR}/error_details.txt"
+
+  touch "${PROCESSED_LIST}" "${FAILED_LOG}" "${FAILED_ARCHIVE}" "${CONVERSION_LOG}" "${ERROR_LOG}"
+
+  if [[ -s "${FAILED_LOG}" ]]; then
+    {
+      printf '\n=== Archived at %s ===\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+      cat "${FAILED_LOG}"
+    } >> "${FAILED_ARCHIVE}"
+    : > "${FAILED_LOG}"
+  fi
+
+  SESSION_STARTED="$(date '+%Y-%m-%d %H:%M:%S')"
+  {
+    printf '\n=== Conversion session started at %s ===\n' "${SESSION_STARTED}"
+    printf 'Input: %s\n' "${INPUT_PATH}"
+    printf 'Output: %s\n' "${OUTPUT_PATH}"
+    printf 'State dir: %s\n\n' "${STATE_DIR}"
+  } >> "${CONVERSION_LOG}"
+}
+
+build_marker_base_args() {
+  MARKER_BASE_ARGS=("--output_dir" "${OUTPUT_PATH}" "--output_format" "${OUTPUT_FORMAT}")
+
   if [[ -n "${PAGE_RANGE}" ]]; then
-    MARKER_CMD+=("--page_range" "${PAGE_RANGE}")
+    MARKER_BASE_ARGS+=("--page_range" "${PAGE_RANGE}")
   fi
   if [[ -n "${CONFIG_JSON}" ]]; then
-    MARKER_CMD+=("--config_json" "${CONFIG_JSON}")
+    MARKER_BASE_ARGS+=("--config_json" "${CONFIG_JSON}")
   fi
   if [[ "${DISABLE_IMAGE_EXTRACTION}" == true ]]; then
-    MARKER_CMD+=("--disable_image_extraction")
+    MARKER_BASE_ARGS+=("--disable_image_extraction")
   fi
   if [[ "${DISABLE_MULTIPROCESSING}" == true ]]; then
-    MARKER_CMD+=("--disable_multiprocessing")
+    MARKER_BASE_ARGS+=("--disable_multiprocessing")
   fi
   if [[ "${USE_LLM}" == true ]]; then
-    MARKER_CMD+=("--use_llm")
+    MARKER_BASE_ARGS+=("--use_llm")
     if [[ -n "${LLM_SERVICE}" ]]; then
-      MARKER_CMD+=("--llm_service" "${LLM_SERVICE}")
+      MARKER_BASE_ARGS+=("--llm_service" "${LLM_SERVICE}")
     fi
     if [[ -n "${MODEL_NAME}" ]]; then
-      MARKER_CMD+=("--model_name" "${MODEL_NAME}")
+      MARKER_BASE_ARGS+=("--model_name" "${MODEL_NAME}")
     fi
     if [[ -n "${SERVICE_TIMEOUT}" ]]; then
-      MARKER_CMD+=("--timeout" "${SERVICE_TIMEOUT}")
+      MARKER_BASE_ARGS+=("--timeout" "${SERVICE_TIMEOUT}")
     fi
     if [[ -n "${CLAUDE_MODEL_NAME}" ]]; then
-      MARKER_CMD+=("--claude_model_name" "${CLAUDE_MODEL_NAME}")
+      MARKER_BASE_ARGS+=("--claude_model_name" "${CLAUDE_MODEL_NAME}")
     fi
     if [[ -n "${GEMINI_MODEL_NAME}" ]]; then
-      MARKER_CMD+=("--gemini_model_name" "${GEMINI_MODEL_NAME}")
+      MARKER_BASE_ARGS+=("--gemini_model_name" "${GEMINI_MODEL_NAME}")
     fi
   fi
-}
 
-append_extra_marker_flags() {
   if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then
-    MARKER_CMD+=("${EXTRA_ARGS[@]}")
+    MARKER_BASE_ARGS+=("${EXTRA_ARGS[@]}")
   fi
 }
 
-run_marker_command() {
-  if ! command -v "${MARKER_CMD[0]}" >/dev/null 2>&1; then
-    echo "Error: command not found: ${MARKER_CMD[0]}" >&2
-    exit 1
-  fi
+run_one_pdf() {
+  local pdf_path="$1"
+  local attempt_idx="$2"
+  local total="$3"
+  local temp_error_file=""
+  local exit_code=0
+  local fail_ts=""
+  local cmd=()
 
-  echo "Running: ${MARKER_CMD[0]} (${MODE} mode)" >&2
+  cmd=("${MARKER_SINGLE_BIN:-marker_single}" "${pdf_path}" "${MARKER_BASE_ARGS[@]}")
 
+  temp_error_file="$(mktemp "${STATE_DIR}/marker_error.XXXXXX")"
+
+  printf '[%s/%s] Processing: %s\n' "${attempt_idx}" "${total}" "${pdf_path}"
+
+  set +e
   if [[ "${MARKER_TIMEOUT}" -gt 0 ]]; then
-    run_with_timeout "${MARKER_TIMEOUT}" "${MARKER_CMD[@]}"
+    run_with_timeout "${MARKER_TIMEOUT}" "${cmd[@]}" > "${temp_error_file}" 2>&1
   else
-    "${MARKER_CMD[@]}"
+    "${cmd[@]}" > "${temp_error_file}" 2>&1
   fi
+  exit_code=$?
+  set -e
+
+  if [[ ${exit_code} -eq 0 ]]; then
+    append_unique_line "${PROCESSED_LIST}" "${pdf_path}"
+    printf 'SUCCESS: %s\n' "${pdf_path}" >> "${CONVERSION_LOG}"
+    rm -f "${temp_error_file}"
+    return 0
+  fi
+
+  fail_ts="$(date '+%Y-%m-%d %H:%M:%S')"
+  if [[ ${exit_code} -eq 124 ]]; then
+    printf '[%s] TIMEOUT: %s\n' "${fail_ts}" "${pdf_path}" >> "${FAILED_LOG}"
+    printf 'TIMEOUT: %s\n' "${pdf_path}" >> "${CONVERSION_LOG}"
+  else
+    printf '[%s] FAILED (exit code %s): %s\n' "${fail_ts}" "${exit_code}" "${pdf_path}" >> "${FAILED_LOG}"
+    printf 'FAILED (exit code %s): %s\n' "${exit_code}" "${pdf_path}" >> "${CONVERSION_LOG}"
+  fi
+
+  {
+    printf '=== Error for: %s (%s) ===\n' "${pdf_path}" "${fail_ts}"
+    cat "${temp_error_file}"
+    printf '\n'
+  } >> "${ERROR_LOG}"
+
+  rm -f "${temp_error_file}"
+  return "${exit_code}"
+}
+
+run_sequential_conversion() {
+  local total="${#PDF_FILES[@]}"
+  local current=0
+  local success_count=0
+  local failed_count=0
+  local skipped_count=0
+  local final_exit=0
+  local pdf_path=""
+  local run_exit=0
+
+  if [[ "${total}" -eq 0 ]]; then
+    echo "No PDF files found under input: ${INPUT_PATH}"
+    return 0
+  fi
+
+  printf 'Found %s PDF(s).\n' "${total}"
+  printf 'Output directory: %s\n' "${OUTPUT_PATH}"
+  printf 'State directory: %s\n\n' "${STATE_DIR}"
+
+  for pdf_path in "${PDF_FILES[@]}"; do
+    current=$((current + 1))
+
+    if [[ "${FORCE}" != true ]] && grep -F -x -q -- "${pdf_path}" "${PROCESSED_LIST}"; then
+      printf '[%s/%s] Skipped (already processed): %s\n' "${current}" "${total}" "${pdf_path}"
+      printf 'SKIPPED (already processed): %s\n' "${pdf_path}" >> "${CONVERSION_LOG}"
+      skipped_count=$((skipped_count + 1))
+      continue
+    fi
+
+    run_exit=0
+    run_one_pdf "${pdf_path}" "${current}" "${total}" || run_exit=$?
+
+    if [[ ${run_exit} -eq 0 ]]; then
+      success_count=$((success_count + 1))
+      printf '  OK\n'
+    else
+      failed_count=$((failed_count + 1))
+      printf '  FAILED (exit code %s)\n' "${run_exit}"
+      if [[ "${FAIL_FAST}" == true ]]; then
+        final_exit=1
+        break
+      fi
+    fi
+  done
+
+  {
+    printf '\nSession completed at %s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+    printf 'Attempted: %s\n' "${current}"
+    printf 'Succeeded: %s\n' "${success_count}"
+    printf 'Failed: %s\n' "${failed_count}"
+    printf 'Skipped: %s\n' "${skipped_count}"
+  } >> "${CONVERSION_LOG}"
+
+  {
+    printf '\n--- Session %s ---\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+    printf 'Attempted: %s | Succeeded: %s | Failed: %s | Skipped: %s\n' "${current}" "${success_count}" "${failed_count}" "${skipped_count}"
+  } >> "${FAILED_LOG}"
+
+  printf '\n=== Conversion Session Complete ===\n'
+  printf 'Attempted: %s\n' "${current}"
+  printf 'Succeeded: %s\n' "${success_count}"
+  printf 'Failed: %s\n' "${failed_count}"
+  printf 'Skipped: %s\n' "${skipped_count}"
+  printf 'Conversion log: %s\n' "${CONVERSION_LOG}"
+  printf 'Failed log: %s\n' "${FAILED_LOG}"
+  printf 'Error details: %s\n' "${ERROR_LOG}"
+  printf 'Processed list: %s\n' "${PROCESSED_LIST}"
+
+  return "${final_exit}"
 }
 
 main() {
@@ -592,15 +773,21 @@ main() {
   normalize_boolean_flags
   validate_numeric_flags
   validate_inputs
-  resolve_mode
   resolve_default_output_path
+  resolve_state_dir
   validate_extra_args
   validate_llm_keys
   export_api_keys
-  build_marker_command
-  append_marker_flags
-  append_extra_marker_flags
-  run_marker_command
+  collect_pdf_files
+  prepare_state_files
+  build_marker_base_args
+
+  if ! command -v "${MARKER_SINGLE_BIN:-marker_single}" >/dev/null 2>&1; then
+    echo "Error: command not found: ${MARKER_SINGLE_BIN:-marker_single}" >&2
+    exit 1
+  fi
+
+  run_sequential_conversion
 }
 
 main "$@"
